@@ -2,7 +2,7 @@ const connect_to_db = require('./db');
 // GET BY TALK HANDLER
 const talk = require('./Talk');
 
-module.exports.get_talks_by_tag = (event, context, callback) => {
+module.exports.get_talks_by_tags = (event, context, callback) => {
     context.callbackWaitsForEmptyEventLoop = false;
     console.log('Received event:', JSON.stringify(event, null, 2));
     let body = {}
