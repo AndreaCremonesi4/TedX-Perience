@@ -1,7 +1,7 @@
 const connect_to_db = require('./db');
 const talksModel = require('./Talk');
 
-module.exports.Top_Speakers_by_Trending = (event, context, callback) => {
+module.exports.Top_Speakers = (event, context, callback) => {
     context.callbackWaitsForEmptyEventLoop = false;
     console.log('Received event:', JSON.stringify(event, null, 2));
     let body = {}
@@ -48,13 +48,13 @@ module.exports.Top_Speakers_by_Trending = (event, context, callback) => {
                 speakerCount[mainSpeaker] = (speakerCount[mainSpeaker] || 0) + 1;
             });
 
-            let Top_Speakers_by_Trending_list = Object.keys(speakerCount).filter((speaker) => {
+            let Top_Speakers_by_Trending = Object.keys(speakerCount).filter((speaker) => {
                 return speakerCount[speaker] > 1;
             });
 
             callback(null, {
                 statusCode: 200,
-                body: JSON.stringify(Top_Speakers_by_Trending_list)
+                body: JSON.stringify(Top_Speakers_by_Trending)
             })
         }
         catch(err){
