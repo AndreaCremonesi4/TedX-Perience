@@ -1,38 +1,138 @@
-{
-	"jobConfig": {
-		"name": "TedX-Perience_TedX_to_MongoDB",
-		"description": "",
-		"role": "arn:aws:iam::702561620821:role/LabRole",
-		"command": "glueetl",
-		"version": "3.0",
-		"runtime": null,
-		"workerType": "G.1X",
-		"numberOfWorkers": 10,
-		"maxCapacity": 10,
-		"maxRetries": 0,
-		"timeout": 2880,
-		"maxConcurrentRuns": 1,
-		"security": "none",
-		"scriptName": "TedX-Perience_TedX_to_MongoDB.py",
-		"scriptLocation": "s3://tedx-perience-script/script/",
-		"language": "python-3",
-		"jobParameters": [],
-		"tags": [],
-		"jobMode": "DEVELOPER_MODE",
-		"createdOn": "2023-05-18T13:09:45.259Z",
-		"developerMode": true,
-		"connectionsList": [],
-		"temporaryDirectory": "s3://aws-glue-assets-702561620821-us-east-1/temporary/",
-		"logging": true,
-		"glueHiveMetastore": true,
-		"etlAutoTuning": true,
-		"metrics": true,
-		"spark": true,
-		"bookmark": "job-bookmark-disable",
-		"sparkPath": "s3://tedx-perience-script/logs/",
-		"flexExecution": false,
-		"minFlexWorkers": null
-	},
-	"hasBeenSaved": false,
-	"script": "import sys\nimport json\nimport pyspark\nfrom pyspark.sql.functions import col, collect_list, collect_set, regexp_replace, sort_array, struct, explode, monotonically_increasing_id, row_number\nfrom pyspark.sql.window import Window\n\nfrom awsglue.transforms import *\nfrom awsglue.utils import getResolvedOptions\nfrom pyspark.context import SparkContext\nfrom awsglue.context import GlueContext\nfrom awsglue.job import Job\n\n############################## FUNZIONI #####################################\n\ndef calc_avg_views(num_views, views):\n    for a in range(len(num_views)):\n        if(num_views[a]==0):\n            num_views[a]=views[a]\n        if(views[a]==0):\n            views[a]=num_views[a]\n    return [(a+b)/2 for a, b in zip(num_views, views)]\n\n#############################################################################\n\n##### FROM FILES\ntedx_dataset_path = \"s3://tedx-perience-data/tedx_dataset.csv\"\n\n##### READ PARAMETERS\nargs = getResolvedOptions(sys.argv, ['JOB_NAME'])\n\n##### START JOB CONTEXT AND JOB\nsc = SparkContext()\nglueContext = GlueContext(sc)\nspark = glueContext.spark_session\njob = Job(glueContext)\njob.init(args['JOB_NAME'], args)\njob.commit()\n\n##### READ INPUT FILES TO CREATE AN INPUT DATASET\ntedx_dataset = spark.read \\\n    .option(\"header\",\"true\") \\\n    .option(\"quote\",\"\\\"\") \\\n    .option(\"escape\",\"\\\"\") \\\n    .csv(tedx_dataset_path)\n    \ntedx_dataset.printSchema()\n\n##### FILTER ITEMS WITH NULL POSTING KEY\ncount_items = tedx_dataset.count()\ncount_items_null = tedx_dataset.filter(\"idx is not null\").count()\n\nprint(f\"Number of items from RAW DATA {count_items}\")\nprint(f\"Number of items from RAW DATA with NOT NULL KEY {count_items_null}\")\n\n##### READ TAGS DATASET\ntags_dataset_path = \"s3://tedx-perience-data/tags_dataset.csv\"\ntags_dataset = spark.read.option(\"header\", \"true\").csv(tags_dataset_path)\n\n##### CREATE THE AGGREGATE MODEL, ADD TAGS TO TEDX DATASET\ntags_dataset_agg = tags_dataset.groupBy(col(\"idx\").alias(\"idx_ref\")).agg(collect_list(\"tag\").alias(\"tags\"))\ntags_dataset_agg.printSchema()\ntedx_dataset_agg = tedx_dataset.join(tags_dataset_agg, tedx_dataset.idx == tags_dataset_agg.idx_ref, \"left\") \\\n    .drop(\"idx_ref\") \\\n    .select(col(\"idx\").alias(\"_id\"), col(\"*\")) \\\n    .drop(\"idx\") \\\n\ntedx_dataset_agg.printSchema()\n\n##### READ WATCH NEXT DATASET\nwatch_next_dataset_path = \"s3://tedx-perience-data/watch_next_dataset.csv\"\nwatch_next_dataset = spark.read.option(\"header\", \"true\").csv(watch_next_dataset_path)\n\n##### CREATE THE AGGREGATE MODEL WATCH NEXT\nwatch_next_dataset_agg = watch_next_dataset.groupBy(col(\"idx\").alias(\"idx_ref\")).agg(collect_set(\"watch_next_idx\").alias(\"watch_next\"))\nwatch_next_dataset_agg.printSchema()\ntedx_dataset_agg = tedx_dataset_agg.join(watch_next_dataset_agg, tedx_dataset_agg._id == watch_next_dataset_agg.idx_ref, \"left\") \\\n    .drop(\"idx_ref\") \\\n    \n##### READ FILE DATA\ntedx_newdataset_path = \"s3://tedx-perience-data/data.csv\"\ntedx_newdataset = spark.read \\\n    .option(\"header\",\"true\") \\\n    .option(\"quote\",\"\\\"\") \\\n    .option(\"escape\",\"\\\"\") \\\n    .option(\"delimiter\", \",\") \\\n    .csv(tedx_newdataset_path)\ntedx_newdataset = tedx_newdataset.join(tedx_dataset_agg, tedx_newdataset.title == tedx_dataset_agg.title, \"inner\")\n\ntedx_newdataset = (\n    tedx_newdataset\n    .withColumn('num_views', regexp_replace('num_views', ',', ''))\n    .withColumn('num_views', col('num_views').cast(\"int\"))\n)\n\ntedx_newdataset = (\n    tedx_newdataset\n    .withColumn('views', regexp_replace('views', ',', ''))\n    .withColumn('views', col('views').cast(\"int\"))\n)\n\n##### SAVE DATA AS LISTS\nnum_views = tedx_newdataset.select(\"num_views\").rdd.flatMap(lambda x: x).map(lambda x: int(x) if x else 0).collect()\nviews =  tedx_newdataset.select(\"views\").rdd.flatMap(lambda x: x).map(lambda x: int(x) if x else 0).collect()\n\n##### FIND AVERAGE VIEWS\navg_views_list = calc_avg_views(num_views, views)\ndf_avg_views = spark \\\n    .createDataFrame([(avg_views_list,)], ['lista'])\\\n    .select(explode(col('lista')).alias('avg_views'))\n    \n##### ADD INDEX TO DATA FRAME TO JOIN\ndf_avg_views = df_avg_views.withColumn(\"index\", row_number().over(Window.orderBy(monotonically_increasing_id())))\ntedx_newdataset = tedx_newdataset.withColumn(\"index\", row_number().over(Window.orderBy(monotonically_increasing_id())))\n\n##### JOIN DATA FRAMES\ntedx_newdataset_complete = tedx_newdataset \\\n    .join(df_avg_views, tedx_newdataset.index == df_avg_views.index, \"inner\") \\\n    .drop(\"index\") \\\n    .withColumnRenamed(\"idx\", \"idx_ref\")\n\n##### STORE DATA ON MONGODB\nmongo_uri = \"mongodb+srv://Ombuman:admin123@tedxcluster.lzu3kfz.mongodb.net\"\nprint(mongo_uri)\n\nwrite_mongo_options = {\n    \"uri\": mongo_uri,\n    \"database\": \"unibg_tedx_2023\",\n    \"collection\": \"tedx_data\",\n    \"ssl\": \"true\",\n    \"ssl.domain_match\": \"false\"}\nfrom awsglue.dynamicframe import DynamicFrame\ntedx_dataset_dynamic_frame = DynamicFrame.fromDF(tedx_newdataset_complete, glueContext, \"nested\")\n\nglueContext.write_dynamic_frame.from_options(tedx_dataset_dynamic_frame, connection_type=\"mongodb\", connection_options=write_mongo_options)"
-}
+import sys
+import json
+import pyspark
+from pyspark.sql.functions import col, collect_list, collect_set, regexp_replace, sort_array, struct, explode, monotonically_increasing_id, row_number
+from pyspark.sql.window import Window
+
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+
+############################## FUNZIONI #####################################
+
+def calc_avg_views(n_v, v ):
+    for a in range(len(n_v)):
+        if(n_v[a]==0):
+            n_v[a]=v[a]
+        if(v[a]==0):
+            v[a]=n_v[a]
+    return [int((a+b)/2) for a, b in zip(n_v, v)]
+
+#############################################################################
+
+
+##### FROM FILES
+tedx_dataset_path = "s3://unibg-tedx-perience-data-2023/tedx_dataset.csv"
+
+##### READ PARAMETERS
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+##### START JOB CONTEXT AND JOB
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+job.commit()
+
+##### READ INPUT FILES TO CREATE AN INPUT DATASET
+tedx_dataset = spark.read \
+    .option("header","true") \
+    .option("quote","\"") \
+    .option("escape","\"") \
+    .csv(tedx_dataset_path)
+    
+tedx_dataset.printSchema()
+
+##### FILTER ITEMS WITH NULL POSTING KEY
+count_items = tedx_dataset.count()
+count_items_null = tedx_dataset.filter("idx is not null").count()
+
+print(f"Number of items from RAW DATA {count_items}")
+print(f"Number of items from RAW DATA with NOT NULL KEY {count_items_null}")
+
+##### READ TAGS DATASET
+tags_dataset_path = "s3://unibg-tedx-perience-data-2023/tags_dataset.csv"
+tags_dataset = spark.read.option("header", "true").csv(tags_dataset_path)
+
+##### CREATE THE AGGREGATE MODEL, ADD TAGS TO TEDX DATASET
+tags_dataset_agg = tags_dataset.groupBy(col("idx").alias("idx_ref")).agg(collect_list("tag").alias("tags"))
+tags_dataset_agg.printSchema()
+tedx_dataset_agg = tedx_dataset.join(tags_dataset_agg, tedx_dataset.idx == tags_dataset_agg.idx_ref, "left") \
+    .drop("idx_ref") \
+    .select(col("idx").alias("_id"), col("*")) \
+    .drop("idx") \
+
+tedx_dataset_agg.printSchema()
+
+##### READ watch next dataset
+watch_next_dataset_path = "s3://unibg-tedx-perience-data-2023/watch_next_dataset.csv"
+watch_next_dataset = spark.read.option("header", "true").csv(watch_next_dataset_path)
+### Modello aggregato dei watcch next
+watch_next_dataset_agg = watch_next_dataset.groupBy(col("idx").alias("idx_ref")).agg(collect_set("watch_next_idx").alias("watch_next_list"))
+watch_next_dataset_agg.printSchema()
+
+tedx_dataset_agg = tedx_dataset_agg.join(watch_next_dataset_agg, tedx_dataset_agg._id == watch_next_dataset_agg.idx_ref, "left") \
+    .drop("idx_ref") \
+
+# Lettura file data
+tedx_data_path = "s3://unibg-tedx-perience-data-2023/data.csv"
+tedx_data = spark.read \
+        .option("header", "true") \
+        .option("quote", "\"") \
+        .option("escape", "\"") \
+        .option("delimiter", ",") \
+        .csv(tedx_data_path)
+tedx_data = tedx_data.join(tedx_dataset_agg, tedx_data.title == tedx_dataset_agg.title, "inner")
+
+tedx_data = (
+    tedx_data
+    .withColumn('num_views', regexp_replace('num_views', ',', ''))
+    .withColumn('num_views', col('num_views').cast("int"))
+)
+
+tedx_data = (
+    tedx_data
+    .withColumn('views', regexp_replace('views', ',', ''))
+    .withColumn('views', col('views').cast("int"))
+)
+
+
+# Salva i dati delle colonne num_views e views come liste
+num_views = tedx_data.select("num_views").rdd.flatMap(lambda x: x).map(lambda x: int(x) if x else 0).collect()
+views =  tedx_data.select("views").rdd.flatMap(lambda x: x).map(lambda x: int(x) if x else 0).collect()
+
+
+# Calcolo della lista dei valori
+avg_views_list = calc_avg_views(num_views, views) 
+##avendo unito due dataset che discostano di poco i valori del campo
+## calcolo una media delle visualizzazioni
+
+df_avg_views = spark \
+    .createDataFrame([(avg_views_list,)], ['lista'])\
+    .select(explode(col('lista')).alias('avg_views'))
+
+# Aggiunta degli indici ai Data Frame per eseguire la join
+df_avg_views = df_avg_views.withColumn("index", row_number().over(Window.orderBy(monotonically_increasing_id())))
+tedx_data = tedx_data.withColumn("index", row_number().over(Window.orderBy(monotonically_increasing_id())))
+
+# Unione dei Data Frame
+tedx_data_complete = tedx_data \
+    .join(df_avg_views, tedx_data.index == df_avg_views.index, "inner") \
+    .drop("index") \
+    .withColumnRenamed("idx", "idx_ref") 
+
+##### STORE DATA ON MONGODB
+mongo_uri = "mongodb+srv://RomeoOdajiu:Admin123@tedxperience2023.3r6eb23.mongodb.net"
+print(mongo_uri)
+
+write_mongo_options = {
+    "uri": mongo_uri,
+    "database": "unibg_tedx_2023",
+    "collection": "tedx_data",
+    "ssl": "true",
+    "ssl.domain_match": "false"}
+from awsglue.dynamicframe import DynamicFrame
+tedx_dataset_dynamic_frame = DynamicFrame.fromDF(tedx_data_complete, glueContext, "nested")
