@@ -77,7 +77,7 @@ watch_next_dataset_agg.printSchema()
 tedx_dataset_agg = tedx_dataset_agg.join(watch_next_dataset_agg, tedx_dataset_agg._id == watch_next_dataset_agg.idx_ref, "left") \
     .drop("idx_ref") \
 
-# Lettura file data
+# LETTURA FILE DATA
 tedx_data_path = "s3://unibg-tedx-perience-data-2023/data.csv"
 tedx_data = spark.read \
         .option("header", "true") \
