@@ -10,7 +10,7 @@ module.exports.Top_Speakers_by_Trending = (event, context, callback) => {
     }
 
    if(body.num_video==null) {
-       body.num_video = 25;
+       body.num_video = 11;
    }
    if(body.num_video < 1) {
        body.num_video = 1;
