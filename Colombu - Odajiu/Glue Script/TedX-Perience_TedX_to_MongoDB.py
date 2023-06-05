@@ -74,7 +74,8 @@ watch_next_dataset = spark.read.option("header", "true").csv(watch_next_dataset_
 watch_next_dataset_agg = watch_next_dataset.groupBy(col("idx").alias("idx_ref")).agg(collect_set("watch_next_idx").alias("watch_next"))
 watch_next_dataset_agg.printSchema()
 tedx_dataset_agg = tedx_dataset_agg.join(watch_next_dataset_agg, tedx_dataset_agg._id == watch_next_dataset_agg.idx_ref, "left") \
-    .drop("idx_ref") \
+    .drop("idx_ref")
+watch_next_dataset_agg.printSchema()
     
 ##### READ FILE DATA
 tedx_newdataset_path = "s3://tedx-perience-data/data.csv"
@@ -90,6 +91,7 @@ tedx_newdataset = (
     tedx_newdataset
     .withColumn('num_views', regexp_replace('num_views', ',', ''))
     .withColumn('num_views', col('num_views').cast("int"))
+    .withColumn('likes', col('likes').cast("int"))
 )
 
 tedx_newdataset = (
